@@ -7,17 +7,82 @@ app = Flask(__name__)
 
 def load_data():
     """Load and process the rewards CSV file"""
-    csv_path = 'rewards2.csv'
+    csv_path = 'rewards.csv'
     
     if not os.path.exists(csv_path):
         return None
     
-    # Read CSV, skipping the first row which is just "rewards"
-    df = pd.read_csv(csv_path, skiprows=1)
+    # Read CSV normally (header is the first row)
+    df = pd.read_csv(csv_path)
+    
+    # Rename licenseId to alias for consistency in the code
+    if 'licenseId' in df.columns:
+        df = df.rename(columns={'licenseId': 'alias'})
+    
     df['date'] = pd.to_datetime(df['date'])
     df['amount_usd'] = df['amount_usd'].astype(float)
     
     return df
+
+def generate_monthly_table(df):
+    """Generate monthly financial table from rewards data"""
+    if df is None or df.empty:
+        return None, None
+    
+    # Group rewards by month
+    df['year_month'] = df['date'].dt.to_period('M')
+    monthly_rewards = df.groupby('year_month')['amount_usd'].sum().sort_index()
+    
+    # Get all months from data
+    months = monthly_rewards.index.tolist()
+    
+    # Initialize table data
+    table_data = []
+    saldo_inicial = -5000  # Starting balance
+    
+    for i, month in enumerate(months):
+        # Convert period to datetime for formatting
+        month_date = month.to_timestamp()
+        next_month_date = (month + 1).to_timestamp()
+        
+        # Format dates as dd/mm/yy
+        mes_ref = month_date.strftime('%d/%m/%y') if i > 0 else '-'
+        mes = next_month_date.strftime('%d/%m/%y')
+        
+        # Financial calculations
+        gastos = 0  # Currently 0
+        bruto = monthly_rewards[month]
+        liquido = bruto + gastos  # bruto - gastos (but gastos is 0)
+        saldo_final = saldo_inicial + liquido
+        
+        table_data.append({
+            'Mês Ref.': mes_ref,
+            'Mês': mes,
+            'Saldo inicial': saldo_inicial,
+            'Gastos / mês': gastos,
+            'Bruto / mês': bruto,
+            'Líquido / mês': liquido,
+            'Saldo final': saldo_final
+        })
+        
+        # Next month's starting balance is this month's final balance
+        saldo_inicial = saldo_final
+    
+    # Create DataFrame
+    monthly_df = pd.DataFrame(table_data)
+    
+    # Calculate SUM row
+    sum_row = {
+        'Mês Ref.': 'TOTAL',
+        'Mês': '',
+        'Saldo inicial': '',
+        'Gastos / mês': monthly_df['Gastos / mês'].sum(),
+        'Bruto / mês': monthly_df['Bruto / mês'].sum(),
+        'Líquido / mês': monthly_df['Líquido / mês'].sum(),
+        'Saldo final': f"{((monthly_df.iloc[-1]['Saldo final'] + 5000) / 5000 * 100):.1f}%" if len(monthly_df) > 0 else '%'
+    }
+    
+    return monthly_df, sum_row
 
 def calculate_stats(df):
     """Calculate all relevant statistics"""
@@ -86,6 +151,7 @@ def calculate_stats(df):
     df['month'] = df['date'].dt.to_period('M')
     monthly = df.groupby('month')['amount_usd'].sum()
     stats['avg_per_month'] = monthly.mean()
+    stats['total_months'] = len(monthly)
     stats['monthly_breakdown'] = {
         str(k): round(v, 2) for k, v in monthly.to_dict().items()
     }
@@ -148,10 +214,14 @@ def index():
     df = load_data()
     
     if df is None:
-        return "Error: rewards2.csv not found. Please place it in the same directory as app.py", 404
+        return "Erro: rewards.csv não encontrado. Por favor, coloque-o no mesmo diretório que app.py", 404
     
     stats = calculate_stats(df)
-    return render_template('dashboard.html', stats=stats)
+    
+    # Generate monthly table from rewards data
+    monthly_df, monthly_sum = generate_monthly_table(df)
+    
+    return render_template('dashboard.html', stats=stats, monthly_df=monthly_df, monthly_sum=monthly_sum)
 
 @app.route('/api/stats')
 def api_stats():
